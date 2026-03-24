@@ -1,0 +1,17 @@
+# ────────────────────────────────────────────────
+# ESP32-S3 빌드 설정
+# ────────────────────────────────────────────────
+# ESP32-S3는 Xtensa LX7 아키텍처
+# espup으로 설치한 Xtensa 툴체인이 필요합니다
+
+[target.xtensa-esp32s3-none-elf]
+runner = "espflash flash --monitor"
+
+[build]
+target = "xtensa-esp32s3-none-elf"
+
+[env]
+ESP_LOG = "info"
+
+[unstable]
+build-std = ["core", "alloc"]

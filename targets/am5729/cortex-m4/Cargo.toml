@@ -1,0 +1,48 @@
+[package]
+name = "rtos-am5729-m4"
+version = "0.1.0"
+edition = "2021"
+authors = ["Paul Yu <paul.yu@unomic.com>"]
+description = "Real-Time Robot Control — AM5729 Cortex-M4 IPU Firmware (RTIC)"
+license = "MIT"
+
+[dependencies]
+# ── RTIC v2 (ARM Cortex-M4 IPU → NVIC 사용 가능!) ──
+rtic = { version = "2.1", features = ["thumbv7-backend"] }
+rtic-monotonics = { version = "2.0", features = ["cortex-m-systick-64bit"] }
+
+# ── ARM Cortex-M HAL ──
+cortex-m = { version = "0.7", features = ["critical-section-single-core"] }
+cortex-m-rt = "0.7"
+
+# ── TI AM5729 Cortex-M4 IPU PAC (직접 생성 필요) ──
+# am5729-m4-pac = { path = "../pac" }  # svd2rust로 생성
+
+# ── IPC (rpmsg with A15) ──
+# rpmsg-lite-rs = { path = "../rpmsg-lite-rs" }  # Rust binding
+
+# ── 공유 프로토콜 (ESP32-S3와 동일) ──
+# robot-protocol = { path = "../../robot-protocol" }
+
+# ── Core utilities ──
+heapless = "0.8"
+critical-section = "1.2"
+static_cell = "2.1"
+portable-atomic = { version = "1.10", features = ["critical-section"] }
+defmt = "0.3"
+defmt-rtt = "0.4"
+panic-probe = { version = "0.3", features = ["print-defmt"] }
+
+# ── Robot Control (ESP32-S3 프로젝트에서 공유) ──
+# PID, protocol 등은 workspace crate로 분리 예정
+
+[profile.dev]
+opt-level = "s"
+debug = 2
+
+[profile.release]
+opt-level = "s"
+lto = "fat"
+codegen-units = 1
+debug = false
+strip = "debuginfo"

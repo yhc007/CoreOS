@@ -1,0 +1,47 @@
+[package]
+name = "rtos-esp32s3"
+version = "0.1.0"
+edition = "2021"
+authors = ["Paul Yu <paul.yu@unomic.com>"]
+description = "Real-Time Robot Control OS on ESP32-S3 — Phase 1"
+license = "MIT"
+
+[dependencies]
+# ── ESP32-S3 HAL (no_std) ──
+esp-hal = { version = "1.0.0", features = ["esp32s3"] }
+esp-backtrace = { version = "0.15", features = [
+    "esp32s3",
+    "panic-handler",
+    "println",
+] }
+esp-println = { version = "0.13", features = ["esp32s3", "log"] }
+esp-alloc = "0.7"
+
+# ── Embassy async runtime ──
+embassy-executor = { version = "0.7", features = ["task-arena-size-20480"] }
+embassy-time = "0.4"
+esp-hal-embassy = { version = "0.9", features = ["esp32s3"] }
+
+# ── Logging ──
+log = "0.4"
+
+# ── Core utilities ──
+heapless = "0.8"          # Fixed-size collections (no alloc)
+critical-section = "1.2"  # Critical section abstraction
+static_cell = "2.1"       # Safe static initialization
+portable-atomic = { version = "1.10", features = ["critical-section"] }
+
+# ── Robot Control ──
+# PID controller (no_std compatible)
+# nalgebra = { version = "0.33", default-features = false, features = ["libm"] }
+
+[profile.dev]
+opt-level = "s"           # Optimize for size even in debug
+debug = true
+overflow-checks = true
+
+[profile.release]
+opt-level = "s"           # Size optimization
+lto = "fat"               # Link-time optimization
+codegen-units = 1         # Single codegen unit for better optimization
+strip = "debuginfo"       # Strip debug info from release

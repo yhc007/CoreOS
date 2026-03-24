@@ -1,0 +1,17 @@
+# ────────────────────────────────────────────────
+# AM5729 Cortex-M4 (IPU1) 빌드 설정
+# ────────────────────────────────────────────────
+# AM5729 IPU는 ARM Cortex-M4F (FPU 포함)
+# NVIC 사용 가능 → RTIC 완전 지원!
+
+[target.thumbv7em-none-eabihf]
+# remoteproc으로 로딩하는 경우 (A15 Linux에서 M4 펌웨어 로드)
+# runner = "scp target/thumbv7em-none-eabihf/release/rtos-am5729-m4 root@am5729:/lib/firmware/am5729-ipu1-fw.xem4"
+# 또는 CCS (Code Composer Studio) JTAG 디버거
+# runner = "tiobj2bin target/thumbv7em-none-eabihf/release/rtos-am5729-m4"
+
+[build]
+target = "thumbv7em-none-eabihf"
+
+[env]
+DEFMT_LOG = "info"
