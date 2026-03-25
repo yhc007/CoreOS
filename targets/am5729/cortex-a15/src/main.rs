@@ -13,8 +13,10 @@ mod actors;
 mod ipc;
 
 use anyhow::Result;
-use tracing::{info, Level};
+use tracing::{info, warn, Level};
 use tracing_subscriber::FmtSubscriber;
+
+use crate::actors::tsn::{TsnActor, TsnConfig, TsnSyncState};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -50,19 +52,50 @@ async fn main() -> Result<()> {
 
     info!("[INIT] All actors spawned");
 
-    // 4. 메인 루프 (또는 ActorSystem await)
-    // system.when_terminated().await?;
+    // 3. TSN Actor 초기화
+    info!("[TSN] Initializing TSN Actor...");
+    let mut tsn_actor = TsnActor::with_defaults();
+    match tsn_actor.init().await {
+        Ok(()) => info!("[TSN] TSN stack initialized successfully"),
+        Err(e) => warn!("[TSN] TSN init failed (may need root): {}", e),
+    }
 
-    // 임시: IPC 에코 루프
+    // 4. 메인 루프 — IPC + TSN 모니터링
+    let mut tsn_poll_interval = tokio::time::interval(
+        std::time::Duration::from_secs(1)
+    );
+
     loop {
-        match ipc.recv().await {
-            Ok(msg) => {
-                info!("[IPC] Received from M4: {} bytes", msg.len());
-                // 디코딩 → Actor에 전달
+        tokio::select! {
+            // rpmsg IPC 수신
+            msg = ipc.recv() => {
+                match msg {
+                    Ok(data) => {
+                        info!("[IPC] Received from M4: {} bytes", data.len());
+                        // 디코딩 → Actor에 전달
+                    }
+                    Err(e) => {
+                        tracing::error!("[IPC] Error: {}", e);
+                        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                    }
+                }
             }
-            Err(e) => {
-                tracing::error!("[IPC] Error: {}", e);
-                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+
+            // TSN 상태 폴링 (1초 주기)
+            _ = tsn_poll_interval.tick() => {
+                let sync_state = tsn_actor.poll_sync_status();
+                match sync_state {
+                    TsnSyncState::Synced { offset_ns } => {
+                        info!("[TSN] gPTP SYNCED — offset={}ns", offset_ns);
+                    }
+                    TsnSyncState::Synchronizing => {
+                        info!("[TSN] gPTP synchronizing...");
+                    }
+                    TsnSyncState::Lost => {
+                        warn!("[TSN] gPTP sync LOST!");
+                    }
+                    _ => {}
+                }
             }
         }
     }

@@ -15,6 +15,8 @@
 //!   ├── /robot/telemetry        → pekko-event-bus 메트릭
 //!   └── /robot/persistence      → pekko-persistence 이벤트 소싱
 
+pub mod tsn;
+
 // pub mod comm_bridge;
 // pub mod safety_monitor;
 // pub mod motion_planner;

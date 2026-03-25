@@ -30,6 +30,10 @@
 //!
 //! 실제 HW 인터럽트:
 //!   MAILBOX5_USER2 (IRQ 26): rpmsg 수신 (binds)
+//!   DCAN1_LINE0   (IRQ 35): CAN 수신 (binds)
+//!   PRU_ICSS1_HOST2 (IRQ 40): TSN 사이클 완료 (binds)
+//!   PRU_ICSS1_HOST3 (IRQ 41): TSN 모터 동기 트리거 (binds)
+//!   PRU_ICSS1_HOST4 (IRQ 42): TSN RX 패킷 수신 (binds)
 
 #![no_std]
 #![no_main]
@@ -88,6 +92,8 @@ mod app {
     use crate::pac::uart::Uart;
     use crate::pac::dcan::{Dcan, CanFrame, can_id, msg_obj};
     use crate::pac::i2c::{I2c, Imu, ImuData, ImuType};
+    use crate::pac::cpsw::Cpsw;
+    use crate::pac::pru::{PruIcss, PruInstance};
     use crate::ipc::rpmsg::{
         RpmsgChannel, RpmsgEndpoint,
         RPMSG_ROBOT_CTRL_ADDR, RPMSG_ROBOT_FB_ADDR,
@@ -120,6 +126,10 @@ mod app {
         feedback_queue: Queue<RobotFeedback, 32>,
         /// rpmsg 채널
         rpmsg: RpmsgChannel,
+        /// TSN 동기화 상태
+        tsn_synced: bool,
+        /// TSN 네트워크 시간 (ns, 최근 스냅샷)
+        tsn_network_time_ns: u64,
     }
 
     // ── 로컬 리소스 (태스크 전용) ──
@@ -147,6 +157,12 @@ mod app {
         dcan1: Dcan,
         /// CAN 수신 프레임 버퍼
         can_rx_buf: [CanFrame; 8],
+        /// CPSW TSN Ethernet 드라이버
+        cpsw: Cpsw,
+        /// PRU-ICSS1 TSN 드라이버
+        pru_icss1: PruIcss,
+        /// TSN 사이클 카운터
+        tsn_cycle_count: u64,
     }
 
     // ── 시스템 상태 ──
@@ -188,7 +204,7 @@ mod app {
     fn init(cx: init::Context) -> (Shared, Local) {
         info!("══════════════════════════════════════");
         info!("  AM5729 Cortex-M4 IPU1 — RTIC v2");
-        info!("  Robot Controller Firmware v0.2.0");
+        info!("  Robot Controller Firmware v0.3.0-TSN");
         info!("══════════════════════════════════════");
 
         // ══════════════════════════════════════════════
@@ -317,13 +333,35 @@ mod app {
         info!("[INIT] rpmsg endpoints announced: ctrl={}, fb={}",
               RPMSG_ROBOT_CTRL_ADDR, RPMSG_ROBOT_FB_ADDR);
 
+        // ══════════════════════════════════════════════
+        // 10. TSN (Time-Sensitive Networking) 초기화
+        // ══════════════════════════════════════════════
+        // CPSW — Ethernet switch (CPTS 802.1AS + EST 802.1Qbv)
+        let cpsw = unsafe { Cpsw::new(pac::addr::CPSW) };
+        cpsw.init_tsn();
+        cpsw.setup_est_robot();
+        info!("[INIT] CPSW TSN: CPTS + EST (125μs robot GCL) configured");
+
+        // PRU-ICSS1 — 산업용 Ethernet (IEP 5ns 타이머)
+        let pru_icss1 = unsafe { PruIcss::new(PruInstance::Icss1) };
+        pru_icss1.init_tsn_stack();
+        info!("[INIT] PRU-ICSS1 TSN stack initialized");
+        info!("[INIT]   IEP: 200MHz (5ns), 125μs cycle");
+        info!("[INIT]   INTC: Host2=cycle, Host3=motor_sync, Host4=rx");
+        info!("[INIT]   Shared Mem: control block + TX/RX ring buffers");
+
+        // TSN 동기화 상태 확인
+        let sync_ok = pru_icss1.get_sync_status();
+        info!("[INIT] TSN sync status: {}", if sync_ok { "SYNCED" } else { "WAITING" });
+
         // ── 주기적 태스크 시작 ──
         heartbeat::spawn().ok();
         motor_control_loop::spawn().ok();
         sensor_read_loop::spawn().ok();
         feedback_sender::spawn().ok();
+        tsn_monitor::spawn().ok();
 
-        info!("[INIT] All tasks spawned. System ready.");
+        info!("[INIT] All tasks spawned (incl. TSN monitor). System ready.");
 
         (
             Shared {
@@ -331,6 +369,8 @@ mod app {
                 cmd_queue: Queue::new(),
                 feedback_queue: Queue::new(),
                 rpmsg,
+                tsn_synced: sync_ok,
+                tsn_network_time_ns: 0,
             },
             Local {
                 led,
@@ -344,6 +384,9 @@ mod app {
                 imu_addr,
                 dcan1,
                 can_rx_buf: [CanFrame::empty(); 8],
+                cpsw,
+                pru_icss1,
+                tsn_cycle_count: 0,
             },
         )
     }
@@ -716,6 +759,100 @@ mod app {
                     *s = SystemState::Warning;
                 }
             });
+        }
+    }
+
+    // ────────────────────────────────────────────────
+    // 인터럽트: PRU-ICSS1 TSN 사이클 완료 (Host2 IRQ)
+    //   125μs TSN 사이클마다 트리거 — 네트워크 시간 동기화
+    // ────────────────────────────────────────────────
+    #[task(
+        binds = PRU_ICSS1_HOST2,
+        local = [pru_icss1, tsn_cycle_count],
+        shared = [tsn_synced, tsn_network_time_ns],
+        priority = 4
+    )]
+    fn tsn_cycle_complete(mut cx: tsn_cycle_complete::Context) {
+        *cx.local.tsn_cycle_count += 1;
+
+        // PRU 공유 메모리에서 네트워크 시간 읽기
+        let net_time = cx.local.pru_icss1.get_network_time_ns();
+        let synced = cx.local.pru_icss1.get_sync_status();
+
+        cx.shared.tsn_network_time_ns.lock(|t| *t = net_time);
+        cx.shared.tsn_synced.lock(|s| *s = synced);
+
+        // IEP CMP0 (사이클 완료) 플래그 클리어
+        cx.local.pru_icss1.iep_check_cmp(0);
+    }
+
+    // ────────────────────────────────────────────────
+    // 인터럽트: PRU-ICSS1 모터 동기 트리거 (Host3 IRQ)
+    //   TSN TC0 슬롯 (0~30μs) 시작 시 — 모터 명령 동기 전송
+    // ────────────────────────────────────────────────
+    #[task(
+        binds = PRU_ICSS1_HOST3,
+        shared = [tsn_synced, system_state],
+        priority = 4
+    )]
+    fn tsn_motor_sync(mut cx: tsn_motor_sync::Context) {
+        let synced = cx.shared.tsn_synced.lock(|s| *s);
+        let state = cx.shared.system_state.lock(|s| *s);
+
+        if synced && state == SystemState::Running {
+            // TSN 동기화 완료 상태에서만 모터 명령을 TSN 네트워크로 전송
+            // TC0 슬롯 (30μs) 내에 모터 제어 프레임 전송 완료해야 함
+            defmt::trace!("[TSN] Motor sync trigger — TC0 slot active");
+        }
+    }
+
+    // ────────────────────────────────────────────────
+    // 인터럽트: PRU-ICSS1 TSN RX 수신 (Host4 IRQ)
+    //   TSN 패킷 수신 시 트리거
+    // ────────────────────────────────────────────────
+    #[task(
+        binds = PRU_ICSS1_HOST4,
+        shared = [feedback_queue],
+        priority = 3
+    )]
+    fn tsn_rx_receive(mut cx: tsn_rx_receive::Context) {
+        // PRU 공유 메모리 RX 링 버퍼에서 수신 패킷 읽기
+        // 수신 데이터를 피드백 큐로 전달
+        defmt::trace!("[TSN] RX packet received");
+    }
+
+    // ────────────────────────────────────────────────
+    // 태스크: TSN 모니터 (주기적 상태 보고)
+    //   1초 주기 — TSN 동기화 상태, 사이클 카운트, CPTS 시간
+    // ────────────────────────────────────────────────
+    #[task(
+        local = [cpsw],
+        shared = [tsn_synced, tsn_network_time_ns, feedback_queue],
+        priority = 1
+    )]
+    async fn tsn_monitor(mut cx: tsn_monitor::Context) {
+        info!("[TSN] Monitor started — 1s cycle");
+
+        loop {
+            let synced = cx.shared.tsn_synced.lock(|s| *s);
+            let net_time = cx.shared.tsn_network_time_ns.lock(|t| *t);
+
+            // CPSW CPTS 하드웨어 타임스탬프 읽기
+            let cpts_time = cx.local.cpsw.cpts_get_time();
+
+            // EST 스케줄 활성 여부
+            let est_active = cx.local.cpsw.est_is_active();
+
+            info!("[TSN] sync={}, net_time={}ns, cpts={}ns, est={}",
+                  synced, net_time, cpts_time, est_active);
+
+            // PHY 링크 상태 확인 (포트 1, PHY addr 0)
+            let link_up = cx.local.cpsw.phy_link_status(0);
+            if !link_up {
+                defmt::warn!("[TSN] PHY link DOWN!");
+            }
+
+            Mono::delay(1000.millis()).await;
         }
     }
 

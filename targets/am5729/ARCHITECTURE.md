@@ -292,3 +292,124 @@ DCAN FUNCCLK = 20 MHz (DPLL_PER)
 500 kbps: BRP=3, TSEG1=13, TSEG2=4, SJW=3
   tq = (3+1)/20MHz = 200ns
 ```
+
+---
+
+## TSN (Time-Sensitive Networking)
+
+CoreOS는 AM5729의 CPSW + PRU-ICSS를 활용하여 IEEE TSN 스택을 구현합니다.
+이를 통해 로봇 관절 간 결정적(deterministic) Ethernet 통신이 가능합니다.
+
+### TSN 아키텍처 개요
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                    TSN Network Architecture                          │
+│                                                                      │
+│  A15 (Linux)                        M4 (RTIC)                       │
+│  ┌──────────────┐                   ┌──────────────┐                │
+│  │ TSN Actor     │                   │ TSN Tasks     │                │
+│  │ ┌──────────┐ │   rpmsg/shared    │ ┌──────────┐ │                │
+│  │ │ ptp4l    │ │   memory IPC      │ │ tsn_cycle │ │                │
+│  │ │ (gPTP)   │ │ ←───────────────→ │ │ _complete │ │                │
+│  │ ├──────────┤ │                   │ ├──────────┤ │                │
+│  │ │ phc2sys  │ │                   │ │ tsn_motor │ │                │
+│  │ │ (clock)  │ │                   │ │ _sync     │ │                │
+│  │ ├──────────┤ │                   │ ├──────────┤ │                │
+│  │ │ tc-taprio│ │                   │ │ tsn_rx    │ │                │
+│  │ │ (EST)    │ │                   │ │ _receive  │ │                │
+│  │ └──────────┘ │                   │ └──────────┘ │                │
+│  └──────┬───────┘                   └──────┬───────┘                │
+│         │                                  │                         │
+│  ┌──────┴──────────────────────────────────┴───────┐                │
+│  │              CPSW (0x4848_0000)                   │                │
+│  │  ┌──────┐ ┌──────┐ ┌──────┐ ┌──────┐ ┌──────┐  │                │
+│  │  │ CPTS │ │ ALE  │ │ EST  │ │CPDMA │ │ MDIO │  │                │
+│  │  │gPTP  │ │L2 Flt│ │802Qbv│ │DMA Ch│ │PHY   │  │                │
+│  │  │HW TS │ │VLAN  │ │ GCL  │ │0-7   │ │Mgmt  │  │                │
+│  │  └──────┘ └──────┘ └──────┘ └──────┘ └──────┘  │                │
+│  └──────────────────────┬──────────────────────────┘                │
+│                         │ RGMII                                      │
+│  ┌──────────────────────┴──────────────────────────┐                │
+│  │           PRU-ICSS1 (0x4B20_0000)                │                │
+│  │  ┌──────┐ ┌──────┐ ┌──────┐ ┌──────────────┐   │                │
+│  │  │ IEP  │ │ PRU  │ │MII_RT│ │ Shared Mem   │   │                │
+│  │  │200MHz│ │Core  │ │L2 RT │ │ TSN IPC      │   │                │
+│  │  │ 5ns  │ │INTC  │ │Mode  │ │ Control+Ring │   │                │
+│  │  └──────┘ └──────┘ └──────┘ └──────────────┘   │                │
+│  └─────────────────────────────────────────────────┘                │
+│                         │                                            │
+│                    ┌────┴────┐                                       │
+│                    │  PHY    │                                       │
+│                    │ 1Gbps  │                                       │
+│                    └────┬────┘                                       │
+│                         │                                            │
+│              ═══════════╧═══════════                                │
+│                  TSN Ethernet                                        │
+│               (802.1AS + 802.1Qbv)                                  │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### EST (802.1Qbv) Gate Control List — 로봇 제어용
+
+125μs 사이클로 트래픽 클래스별 시간 슬롯을 할당합니다:
+
+```
+  0μs          30μs         60μs         100μs      125μs
+  │─── TC0 ────│─── TC1 ────│── TC2+TC5 ──│─ TC7+TC6 ─│
+  │ Motor Ctrl │ Sensor Data│ Vision+gPTP │ BE+Safety │
+  │ (30μs)     │ (30μs)     │ (40μs)      │ (25μs)    │
+  │ 최고 우선순위│ 높은 우선순위│ 중간 우선순위 │ 최저 우선순위│
+
+  GCL Entry 0: gate_mask=0x01, interval=30μs  → TC0 (모터 명령)
+  GCL Entry 1: gate_mask=0x02, interval=30μs  → TC1 (센서 데이터)
+  GCL Entry 2: gate_mask=0x24, interval=40μs  → TC2+TC5 (비전+gPTP)
+  GCL Entry 3: gate_mask=0xC0, interval=25μs  → TC7+TC6 (BE+안전)
+```
+
+### PRU-ICSS IEP 타이머 TSN 사이클
+
+```
+IEP Clock: 200MHz (5ns resolution)
+TSN Cycle: 25,000 ticks = 125μs
+
+CMP0 = 25000 (사이클 완료 → Host2 IRQ → tsn_cycle_complete)
+CMP1 =  6000 (TC0 종료, 30μs → Motor slot end)
+CMP2 = 12000 (TC1 종료, 60μs → Sensor slot end)
+CMP3 = 20000 (TC2 종료, 100μs → Vision slot end)
+
+SYNC0: 125μs 주기 펄스 → 외부 장치 동기화 신호
+```
+
+### TSN 인터럽트 매핑 (IPU1 Crossbar)
+
+```
+PRU-ICSS1 Host 2  →  sys_irq 196  →  NVIC IRQ 40  (TSN 사이클 완료, priority 0x10)
+PRU-ICSS1 Host 3  →  sys_irq 197  →  NVIC IRQ 41  (모터 동기 트리거, priority 0x20)
+PRU-ICSS1 Host 4  →  sys_irq 198  →  NVIC IRQ 42  (TSN RX 수신, priority 0x50)
+```
+
+### CPSW CPTS (IEEE 802.1AS gPTP)
+
+CPTS는 하드웨어 타임스탬프 엔진으로, 네트워크 패킷의 정확한 송수신 시각을 기록합니다:
+
+```
+CPTS 모드: 64비트 카운터 + RX 타임스탬프 활성화
+이벤트: PUSH → EVENT FIFO (LOW/HIGH/INFO)
+gPTP 멀티캐스트: 01:80:C2:00:00:0E → ALE로 Host 포트에 라우팅
+EtherType: 0x88F7 (PTP)
+```
+
+### 파일 구조
+
+```
+cortex-m4/src/pac/
+├── cpsw.rs          — CPSW Ethernet Switch TSN 드라이버
+│                       CPTS, ALE, EST, CPDMA, MAC, MDIO
+├── pru.rs           — PRU-ICSS TSN 드라이버
+│                       IEP 타이머, PRU 코어, INTC, MII_RT, 공유 메모리
+└── intc.rs          — PRU_ICSS1_HOST2/3/4 인터럽트 추가
+
+cortex-a15/src/actors/
+└── tsn.rs           — TSN Actor (linuxptp + tc-taprio 연동)
+```

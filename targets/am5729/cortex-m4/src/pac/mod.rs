@@ -19,6 +19,8 @@ pub mod uart;
 pub mod dcan;
 pub mod epwm;
 pub mod eqep;
+pub mod cpsw;
+pub mod pru;
 
 // ── L4 페리페럴 베이스 주소 (물리 주소) ──
 // IPU AMMU가 1:1 매핑하도록 설정한 후 이 주소 사용
@@ -66,6 +68,13 @@ pub mod addr {
     /// Mailbox (A15 ↔ M4 IPC) 베이스 주소
     pub const MAILBOX5: u32 = 0x4883_A000; // IPU1 ↔ MPU
     pub const MAILBOX6: u32 = 0x4883_C000; // IPU1 ↔ DSP1
+
+    /// CPSW (Common Platform Switch) — Ethernet TSN
+    pub const CPSW: u32 = 0x4848_0000;
+
+    /// PRU-ICSS (Programmable Real-time Unit) — Industrial Ethernet
+    pub const PRU_ICSS1: u32 = 0x4B20_0000;
+    pub const PRU_ICSS2: u32 = 0x4B28_0000;
 }
 
 /// 레지스터 읽기 헬퍼 (volatile)

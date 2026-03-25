@@ -37,6 +37,10 @@
 //! |  23  | TIMER2_IRQ             | GP Timer (미사용)   |
 //! |  26  | MAILBOX5_USER2_IRQ     | rpmsg 수신          |
 //! |  33  | EPWM_TZ_IRQ            | 모터 trip-zone      |
+//! |  35  | DCAN1_LINE0_IRQ        | CAN 수신/송신       |
+//! |  40  | PRU_ICSS1_HOST2_IRQ    | TSN 사이클 완료     |
+//! |  41  | PRU_ICSS1_HOST3_IRQ    | 모터 동기 트리거    |
+//! |  42  | PRU_ICSS1_HOST4_IRQ    | TSN RX 패킷 수신    |
 //! |  55  | (Reserved/Crossbar)    | RTIC Dispatch SW0   |
 //! |  56  | (Reserved/Crossbar)    | RTIC Dispatch SW1   |
 //! |  57  | (Reserved/Crossbar)    | RTIC Dispatch SW2   |
@@ -74,6 +78,15 @@ pub const EPWM_TZ_IRQ: u16 = 33;
 /// DCAN1 Line 0 IRQ (CAN 수신/송신 완료)
 pub const DCAN1_LINE0_IRQ: u16 = 35;
 
+/// PRU-ICSS1 Host Interrupt 2 (TSN 사이클 완료)
+pub const PRU_ICSS1_HOST2_IRQ: u16 = 40;
+
+/// PRU-ICSS1 Host Interrupt 3 (모터 동기 트리거)
+pub const PRU_ICSS1_HOST3_IRQ: u16 = 41;
+
+/// PRU-ICSS1 Host Interrupt 4 (TSN RX 패킷 수신)
+pub const PRU_ICSS1_HOST4_IRQ: u16 = 42;
+
 // ═══════════════════════════════════════════════════════
 // IPU Crossbar (CTRL_MODULE_CORE) — IRQ 매핑 관리
 // ═══════════════════════════════════════════════════════
@@ -105,6 +118,12 @@ pub mod sys_irq {
     pub const I2C1: u16 = 56;
     /// DCAN1 인터럽트 (Line 0)
     pub const DCAN1_LINE0: u16 = 222;
+    /// PRU-ICSS1 Host Interrupt 2 (pr1_host_intr2_intr_req)
+    pub const PRU_ICSS1_HOST2: u16 = 196;
+    /// PRU-ICSS1 Host Interrupt 3 (pr1_host_intr3_intr_req)
+    pub const PRU_ICSS1_HOST3: u16 = 197;
+    /// PRU-ICSS1 Host Interrupt 4 (pr1_host_intr4_intr_req)
+    pub const PRU_ICSS1_HOST4: u16 = 198;
     /// Reserved (Crossbar 무효 입력 — dispatcher용으로 안전)
     pub const RESERVED: u16 = 0;
 }
@@ -176,6 +195,11 @@ pub enum Interrupt {
     EPWM_TRIP_ZONE = EPWM_TZ_IRQ,
     DCAN1_LINE0 = DCAN1_LINE0_IRQ,
 
+    // ── PRU-ICSS TSN 인터럽트 ──
+    PRU_ICSS1_HOST2 = PRU_ICSS1_HOST2_IRQ,  // TSN 사이클 완료
+    PRU_ICSS1_HOST3 = PRU_ICSS1_HOST3_IRQ,  // 모터 동기 트리거
+    PRU_ICSS1_HOST4 = PRU_ICSS1_HOST4_IRQ,  // TSN RX 수신
+
     // ── RTIC dispatcher용 소프트웨어 인터럽트 ──
     // 이들은 Crossbar에서 아무 소스도 연결하지 않음
     // RTIC가 NVIC_ISPR로 소프트웨어 pend 합니다
@@ -219,6 +243,15 @@ pub fn init_crossbar_and_nvic() {
     // DCAN1 Line 0 → NVIC IRQ 35
     crossbar_set_irq(DCAN1_LINE0_IRQ, sys_irq::DCAN1_LINE0);
 
+    // PRU-ICSS1 Host 2 → NVIC IRQ 40 (TSN 사이클 완료)
+    crossbar_set_irq(PRU_ICSS1_HOST2_IRQ, sys_irq::PRU_ICSS1_HOST2);
+
+    // PRU-ICSS1 Host 3 → NVIC IRQ 41 (모터 동기 트리거)
+    crossbar_set_irq(PRU_ICSS1_HOST3_IRQ, sys_irq::PRU_ICSS1_HOST3);
+
+    // PRU-ICSS1 Host 4 → NVIC IRQ 42 (TSN RX 수신)
+    crossbar_set_irq(PRU_ICSS1_HOST4_IRQ, sys_irq::PRU_ICSS1_HOST4);
+
     // ── 2. Dispatcher IRQ들은 Crossbar에 RESERVED(0) 매핑 ──
     // 하드웨어에서 트리거되지 않도록 보장
     crossbar_set_irq(DISPATCH_SW0, sys_irq::RESERVED);
@@ -249,18 +282,36 @@ pub fn init_crossbar_and_nvic() {
         // 피드백 전송(priority 2)보다 높게 설정
         NVIC::unmask(Interrupt::DCAN1_LINE0);
         nvic.set_priority(Interrupt::DCAN1_LINE0, 0x60);
+
+        // PRU-ICSS1 Host 2 (TSN 사이클 완료) — priority 4 (0x10)
+        // 최고 우선순위: TSN 사이클은 125μs 데드라인 준수 필수
+        NVIC::unmask(Interrupt::PRU_ICSS1_HOST2);
+        nvic.set_priority(Interrupt::PRU_ICSS1_HOST2, 0x10);
+
+        // PRU-ICSS1 Host 3 (모터 동기) — priority 4 (0x20)
+        // TSN TC0 슬롯에서 모터 명령 동기 전송
+        NVIC::unmask(Interrupt::PRU_ICSS1_HOST3);
+        nvic.set_priority(Interrupt::PRU_ICSS1_HOST3, 0x20);
+
+        // PRU-ICSS1 Host 4 (TSN RX) — priority 3 (0x50)
+        // TSN 패킷 수신 처리
+        NVIC::unmask(Interrupt::PRU_ICSS1_HOST4);
+        nvic.set_priority(Interrupt::PRU_ICSS1_HOST4, 0x50);
     }
 }
 
 /// Crossbar 매핑 검증 — 디버그용
 ///
 /// 현재 Crossbar 설정을 읽어 반환
-pub fn verify_crossbar() -> [(u16, u16); 8] {
+pub fn verify_crossbar() -> [(u16, u16); 11] {
     [
         (TIMER2_IRQ, crossbar_get_irq(TIMER2_IRQ)),
         (MAILBOX5_USER2_IRQ, crossbar_get_irq(MAILBOX5_USER2_IRQ)),
         (EPWM_TZ_IRQ, crossbar_get_irq(EPWM_TZ_IRQ)),
         (DCAN1_LINE0_IRQ, crossbar_get_irq(DCAN1_LINE0_IRQ)),
+        (PRU_ICSS1_HOST2_IRQ, crossbar_get_irq(PRU_ICSS1_HOST2_IRQ)),
+        (PRU_ICSS1_HOST3_IRQ, crossbar_get_irq(PRU_ICSS1_HOST3_IRQ)),
+        (PRU_ICSS1_HOST4_IRQ, crossbar_get_irq(PRU_ICSS1_HOST4_IRQ)),
         (DISPATCH_SW0, crossbar_get_irq(DISPATCH_SW0)),
         (DISPATCH_SW1, crossbar_get_irq(DISPATCH_SW1)),
         (DISPATCH_SW2, crossbar_get_irq(DISPATCH_SW2)),
