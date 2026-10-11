@@ -39,9 +39,16 @@ fmt:
 lint:
 	cargo clippy -- -W clippy::all
 
-# ── 호스트 테스트 (PID, 프로토콜 등) ──
+# ── 호스트 테스트 (PID, 프로토콜 등 — src/lib.rs) ──
+# .cargo/config.toml 의 build-std(core, alloc)는 덮어쓸 수 없고 병합되므로
+# 호스트 std/test 도 소스에서 빌드한다 (rust-src 필요).
+# esp 툴체인이 없으면: make test CARGO="cargo +nightly"
+CARGO ?= cargo
+HOST_TARGET := $(shell $(subst cargo,rustc,$(CARGO)) -vV | sed -n 's/^host: //p')
+
 test:
-	cargo test --target x86_64-unknown-linux-gnu \
+	$(CARGO) test --target $(HOST_TARGET) \
+		--config 'unstable.build-std=["std","test","panic_unwind"]' \
 		--lib -- --nocapture
 
 # ── 클린 ──
