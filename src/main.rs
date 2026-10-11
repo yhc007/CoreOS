@@ -58,6 +58,19 @@ fn init_heap() {
     }
 }
 
+/// 힙 사용량 로그 (used / free / 전체, 바이트)
+fn log_heap_usage() {
+    let used = esp_alloc::HEAP.used();
+    let free = esp_alloc::HEAP.free();
+    info!(
+        "[HEAP] used: {} B, free: {} B / {} B ({}% used)",
+        used,
+        free,
+        HEAP_SIZE,
+        used * 100 / HEAP_SIZE
+    );
+}
+
 // ────────────────────────────────────────────────
 // Main Entry Point
 // ────────────────────────────────────────────────
@@ -97,6 +110,7 @@ async fn main(spawner: Spawner) {
     info!("[INIT] Heartbeat task spawned");
 
     info!("[INIT] All tasks spawned. Entering main loop.");
+    log_heap_usage();
 
     // 6. Main loop — 시스템 모니터링
     let mut tick: u64 = 0;
@@ -104,6 +118,7 @@ async fn main(spawner: Spawner) {
         tick += 1;
         if tick % 100 == 0 {
             info!("[MAIN] System alive — tick #{}", tick);
+            log_heap_usage();
         }
         Timer::after(Duration::from_millis(100)).await;
     }
