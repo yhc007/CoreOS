@@ -23,6 +23,8 @@ use esp_wifi::{EspWifiController, EspWifiTimerSource};
 use log::{info, warn};
 use static_cell::StaticCell;
 
+use super::command_server;
+
 /// 접속할 AP (빌드 시 주입, 없으면 스캔 모드)
 const SSID: Option<&str> = option_env!("WIFI_SSID");
 const PASSWORD: &str = match option_env!("WIFI_PASSWORD") {
@@ -37,7 +39,9 @@ const SCAN_INTERVAL: Duration = Duration::from_secs(30);
 const RECONNECT_DELAY: Duration = Duration::from_secs(5);
 
 static WIFI_INIT: StaticCell<EspWifiController<'static>> = StaticCell::new();
-static NET_RESOURCES: StaticCell<StackResources<3>> = StaticCell::new();
+/// 소켓 수: DHCP 1 + 명령 서버 리스너 + 여유 1
+static NET_RESOURCES: StaticCell<StackResources<{ command_server::LISTENERS + 2 }>> =
+    StaticCell::new();
 
 /// Wi-Fi 초기화 후 모드에 맞는 태스크들을 스폰
 ///
@@ -82,7 +86,9 @@ pub fn start(
             spawner.must_spawn(connection_task(controller, ssid));
             spawner.must_spawn(net_task(runner));
             spawner.must_spawn(ip_report_task(stack));
-            spawner.must_spawn(super::command_server::command_server_task(stack));
+            for id in 0..command_server::LISTENERS {
+                spawner.must_spawn(command_server::command_server_task(stack, id));
+            }
         }
     }
 }

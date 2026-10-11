@@ -3,7 +3,9 @@
 //! ─────────────────────────────────────────────────────────────
 //!
 //! Wi-Fi(STA) 위에서 TCP 포트 7000으로 `drivers::protocol` 프레임을 주고받습니다.
-//! 한 번에 한 클라이언트만 처리하며, 연결이 끊기면 다시 accept 합니다.
+//! 리스너 태스크 [`LISTENERS`]개가 각자 accept 합니다. 하나만 두면 이전 연결을
+//! 정리하는 동안 리슨 소켓이 없어 새 SYN이 무시되고, 클라이언트가 재전송(~1초)할
+//! 때까지 연결이 지연됩니다. 연결이 끊기면 각 태스크는 다시 accept 합니다.
 //!
 //! 지원 명령:
 //!   Ping          → Pong (페이로드 에코)
@@ -28,30 +30,32 @@ use crate::system;
 
 /// 명령 서버 TCP 포트
 pub const PORT: u16 = 7000;
+/// 동시 리스너 수 (= 동시 처리 가능한 클라이언트 수)
+pub const LISTENERS: usize = 2;
 /// 유휴 연결 타임아웃
 const IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 
-#[embassy_executor::task]
-pub async fn command_server_task(stack: Stack<'static>) {
+#[embassy_executor::task(pool_size = LISTENERS)]
+pub async fn command_server_task(stack: Stack<'static>, id: usize) {
     let mut rx_buffer = [0u8; 1024];
     let mut tx_buffer = [0u8; 1024];
 
     stack.wait_config_up().await;
-    info!("[CMD] Listening on TCP port {}", PORT);
+    info!("[CMD#{}] Listening on TCP port {}", id, PORT);
 
     loop {
         let mut socket = TcpSocket::new(stack, &mut rx_buffer, &mut tx_buffer);
         socket.set_timeout(Some(IDLE_TIMEOUT));
 
         if let Err(e) = socket.accept(PORT).await {
-            warn!("[CMD] accept failed: {:?}", e);
+            warn!("[CMD#{}] accept failed: {:?}", id, e);
             continue;
         }
-        info!("[CMD] Client connected: {:?}", socket.remote_endpoint());
+        info!("[CMD#{}] Client connected: {:?}", id, socket.remote_endpoint());
 
         match serve(&mut socket).await {
-            Ok(()) => info!("[CMD] Client disconnected"),
-            Err(reason) => warn!("[CMD] Connection closed: {}", reason),
+            Ok(()) => info!("[CMD#{}] Client disconnected", id),
+            Err(reason) => warn!("[CMD#{}] Connection closed: {}", id, reason),
         }
         socket.close();
         let _ = socket.flush().await;
