@@ -1,6 +1,6 @@
-# RTOS ESP32-S3 — Robot Controller
+# RTOS ESP32-S3 / ESP32 — Robot Controller
 
-ESP32-S3 기반 실시간 로봇 제어 펌웨어. Embassy async runtime 사용.
+ESP32-S3 / ESP32 기반 실시간 로봇 제어 펌웨어. Embassy async runtime 사용.
 
 ## 아키텍처
 
@@ -12,7 +12,7 @@ ESP32-S3 기반 실시간 로봇 제어 펌웨어. Embassy async runtime 사용.
 └──────────┬──────────────────┘
            │ UART/SPI (< 1ms)
 ┌──────────▼──────────────────┐
-│  Tier 2: ESP32-S3 (이 코드)  │
+│  Tier 2: ESP32-S3/ESP32     │
 │  Embassy async runtime      │
 │  실시간 제어 (< 100µs)       │
 └─────────────────────────────┘
@@ -38,8 +38,12 @@ make build
 ## 빌드 & 플래시
 
 ```bash
-make build          # 릴리즈 빌드
+make build          # 릴리즈 빌드 (ESP32-S3, 기본)
 make flash          # 빌드 + 플래시 + 모니터
+
+# ESP32 보드 (CHIP=esp32), macOS 포트 예시
+make build CHIP=esp32
+make flash CHIP=esp32 PORT=/dev/cu.usbserial-8330
 make monitor        # 시리얼 모니터만
 make test           # 호스트 유닛 테스트 (PID, 프로토콜)
 ```

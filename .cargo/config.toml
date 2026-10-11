@@ -1,11 +1,19 @@
 # ────────────────────────────────────────────────
-# ESP32-S3 빌드 설정
+# ESP32-S3 / ESP32 빌드 설정
 # ────────────────────────────────────────────────
-# ESP32-S3는 Xtensa LX7 아키텍처
+# ESP32-S3는 Xtensa LX7, ESP32는 Xtensa LX6 아키텍처
 # espup으로 설치한 Xtensa 툴체인이 필요합니다
+#
+# 기본 타겟은 ESP32-S3. ESP32는 `make build CHIP=esp32` 사용
+# (--target xtensa-esp32-none-elf --no-default-features --features esp32)
 
 [target.xtensa-esp32s3-none-elf]
 runner = "espflash flash --monitor"
+rustflags = ["-C", "link-arg=-nostartfiles", "-C", "link-arg=-Tlinkall.x"]
+
+[target.xtensa-esp32-none-elf]
+runner = "espflash flash --monitor"
+rustflags = ["-C", "link-arg=-nostartfiles", "-C", "link-arg=-Tlinkall.x"]
 
 [build]
 target = "xtensa-esp32s3-none-elf"

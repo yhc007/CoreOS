@@ -8,7 +8,7 @@ CoreOS: Rust real-time robot control firmware built on a 2-tier model — **Tier
 
 | Crate | Path | Target | Framework | Role |
 |---|---|---|---|---|
-| `rtos-esp32s3` | `/` (root) | `xtensa-esp32s3-none-elf` | esp-hal + Embassy (no_std) | Tier 2 on ESP32-S3; talks to an external Linux SBC over UART/SPI |
+| `rtos-esp32s3` | `/` (root) | `xtensa-esp32s3-none-elf` (default) or `xtensa-esp32-none-elf` | esp-hal + Embassy (no_std) | Tier 2 on ESP32-S3 or ESP32; talks to an external Linux SBC over UART/SPI |
 | `rtos-am5729-m4` | `targets/am5729/cortex-m4` | `thumbv7em-none-eabihf` | RTIC v2 (no_std) | Tier 2 on the AM5729 IPU1 Cortex-M4, loaded by Linux remoteproc |
 | `robot-brain-am5729` | `targets/am5729/cortex-a15` | `armv7-unknown-linux-gnueabihf` | tokio + pekko-rust (std) | Tier 1 on the same AM5729 SoC's Cortex-A15 Linux |
 
@@ -16,9 +16,10 @@ Docs and comments are in Korean. `BUILD_STATUS.md` tracks each target's verifica
 
 ## Build commands
 
-**ESP32-S3 (root)**: needs the `esp` Xtensa toolchain (`espup install`, then `source $HOME/export-esp.sh`) and `espflash`.
+**ESP32-S3 / ESP32 (root)**: needs the `esp` Xtensa toolchain (`espup install`, then `source $HOME/export-esp.sh`) and `espflash`. The chip is chosen with the `esp32s3` (default) or `esp32` cargo feature, which must match `--target`. The Makefile handles both through `CHIP`.
 ```bash
-make build      # cargo build --release
+make build                 # ESP32-S3 (default)
+make build CHIP=esp32      # ESP32: --target xtensa-esp32-none-elf --no-default-features --features esp32
 make flash      # flash + monitor (PORT=/dev/cu.usbserial-* on macOS; default /dev/ttyUSB0)
 make monitor | make check | make lint | make fmt | make size
 ```
@@ -44,11 +45,11 @@ cargo +nightly test --target <host-triple> --config 'unstable.build-std=["std","
 ```
 - Code in `lib.rs` must not touch esp-hal or embassy. Those dependencies sit under `[target.'cfg(target_arch = "xtensa")'.dependencies]` and are absent on the host.
 - The `--config build-std` line is required. Cargo merges config arrays rather than replacing them, so the root `build-std = ["core","alloc"]` cannot be turned off. Without the extra crates, host `std` collides with the rebuilt `core` (E0152 duplicate lang item).
-- `esp-hal` is pinned to `=1.0.0-rc.0` because `esp-hal-embassy 0.9` requires esp-hal's `requires-unstable` feature, which final 1.0.0 removed. A move to esp-hal 1.x final means replacing esp-hal-embassy, and `main.rs` still uses `esp_hal::prelude`.
+- `esp-hal` is pinned to `=1.0.0-rc.0` with the `unstable` feature, because `esp-hal-embassy 0.9` requires both. A move to esp-hal 1.x final means replacing esp-hal-embassy (the entry point is `#[esp_hal_embassy::main]`).
 
 ## Architecture notes
 
-- **ESP32-S3 crate**: `main.rs` sets up the heap (esp-alloc, 32KB), the Embassy time driver on TIMG0 and logging, then spawns Embassy tasks from `src/tasks/`. Each peripheral pin is passed individually into a `src/hal/` driver. Phase 1 is only a heartbeat LED on GPIO2. PWM, I2C, UART and CAN are Phase 2 TODOs in `main.rs`.
+- **ESP crate**: the source has no chip-specific code. Chip choice lives only in the Cargo features, and `main.rs` raises a `compile_error!` unless exactly one is enabled. Per-target `rustflags` in `.cargo/config.toml` pass `-Tlinkall.x` and `-nostartfiles`; without them linking fails with undefined `__exception` and similar symbols. `main.rs` sets up the heap (esp-alloc, 32KB), the Embassy time driver on TIMG0 and logging, then spawns Embassy tasks from `src/tasks/`. Each peripheral pin is passed individually into a `src/hal/` driver. Phase 1 is only a heartbeat LED on GPIO2. PWM, I2C, UART and CAN are Phase 2 TODOs in `main.rs`.
 - **Duplicated control code**: the PID controller exists in both `src/drivers/pid.rs` and `targets/am5729/cortex-m4/src/pid.rs`. The Tier1↔Tier2 protocol lives in `src/drivers/protocol.rs`, and M4 has its own command/feedback encoding. They are meant to move into a shared workspace crate later, so when changing one copy, check the other.
 - **M4 firmware flow** (`cortex-m4/src/main.rs`, RTIC `mod app`):
   - `#[pre_init]` runs `pac::ammu::init_ammu()` before `.data`/`.bss` init, because the AMMU address translation must exist before RAM or peripheral access. Inside `pre_init`, use raw register writes only: no statics, no defmt.

@@ -1,10 +1,16 @@
 # ────────────────────────────────────────────────
-# RTOS ESP32-S3 — Build & Flash Makefile
+# RTOS ESP32-S3 / ESP32 — Build & Flash Makefile
 # ────────────────────────────────────────────────
 
 # USB 포트 (macOS: /dev/cu.usbserial-*, Linux: /dev/ttyUSB0)
 PORT ?= /dev/ttyUSB0
 BAUD ?= 921600
+
+# 칩 선택: esp32s3 (기본) | esp32
+CHIP ?= esp32s3
+TARGET := xtensa-$(CHIP)-none-elf
+CHIP_FLAGS := --target $(TARGET) --no-default-features --features $(CHIP)
+BIN := target/$(TARGET)/release/rtos-esp32s3
 
 .PHONY: all build flash monitor clean setup check test
 
@@ -13,14 +19,14 @@ all: build flash
 
 # ── 빌드 ──
 build:
-	cargo build --release
+	cargo build --release $(CHIP_FLAGS)
 
 build-debug:
-	cargo build
+	cargo build $(CHIP_FLAGS)
 
 # ── 플래시 + 모니터 ──
 flash:
-	espflash flash target/xtensa-esp32s3-none-elf/release/rtos-esp32s3 \
+	espflash flash $(BIN) \
 		--port $(PORT) --baud $(BAUD) --monitor
 
 # ── 시리얼 모니터만 ──
@@ -29,7 +35,7 @@ monitor:
 
 # ── 코드 검사 ──
 check:
-	cargo check
+	cargo check $(CHIP_FLAGS)
 
 # ── 포맷 ──
 fmt:
@@ -37,7 +43,7 @@ fmt:
 
 # ── Clippy 린트 ──
 lint:
-	cargo clippy -- -W clippy::all
+	cargo clippy $(CHIP_FLAGS) -- -W clippy::all
 
 # ── 호스트 테스트 (PID, 프로토콜 등 — src/lib.rs) ──
 # .cargo/config.toml 의 build-std(core, alloc)는 덮어쓸 수 없고 병합되므로
@@ -84,4 +90,4 @@ info:
 
 # ── 메모리 사용량 ──
 size:
-	cargo size --release -- -A
+	cargo size --release $(CHIP_FLAGS) -- -A

@@ -21,15 +21,28 @@
 
 extern crate alloc;
 
+#[cfg(all(feature = "esp32", feature = "esp32s3"))]
+compile_error!("feature `esp32`와 `esp32s3`는 동시에 켤 수 없습니다 (--no-default-features 사용)");
+#[cfg(not(any(feature = "esp32", feature = "esp32s3")))]
+compile_error!("칩 feature를 하나 선택하세요: `esp32` 또는 `esp32s3`");
+
 use embassy_executor::Spawner;
 use embassy_time::{Duration, Timer};
 use esp_backtrace as _;
-use esp_hal::prelude::*;
 use esp_hal::timer::timg::TimerGroup;
 use log::info;
 
 mod hal;
 mod tasks;
+
+// ── 빌드 대상 칩 이름 (부팅 배너용) ──
+#[cfg(feature = "esp32s3")]
+const CHIP_NAME: &str = "ESP32-S3";
+#[cfg(feature = "esp32")]
+const CHIP_NAME: &str = "ESP32";
+
+// espflash 4 / ESP-IDF 2단계 부트로더가 요구하는 앱 디스크립터
+esp_bootloader_esp_idf::esp_app_desc!();
 
 // ── Heap Allocator ──
 const HEAP_SIZE: usize = 32 * 1024;
@@ -49,7 +62,7 @@ fn init_heap() {
 // Main Entry Point
 // ────────────────────────────────────────────────
 
-#[esp_hal::main]
+#[esp_hal_embassy::main]
 async fn main(spawner: Spawner) {
     // 1. 시스템 초기화
     let peripherals = esp_hal::init(esp_hal::Config::default());
@@ -62,7 +75,7 @@ async fn main(spawner: Spawner) {
     // 3. 로깅 초기화
     esp_println::logger::init_logger_from_env();
     info!("══════════════════════════════════════");
-    info!("  RTOS ESP32-S3 — Robot Controller");
+    info!("  RTOS {} — Robot Controller", CHIP_NAME);
     info!("  Version: {}", env!("CARGO_PKG_VERSION"));
     info!("══════════════════════════════════════");
 

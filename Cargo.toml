@@ -3,7 +3,7 @@ name = "rtos-esp32s3"
 version = "0.1.0"
 edition = "2021"
 authors = ["Paul Yu <paul.yu@unomic.com>"]
-description = "Real-Time Robot Control OS on ESP32-S3 — Phase 1"
+description = "Real-Time Robot Control OS on ESP32-S3 / ESP32 — Phase 1"
 license = "MIT"
 
 [dependencies]
@@ -16,26 +16,43 @@ critical-section = "1.2"  # Critical section abstraction
 static_cell = "2.1"       # Safe static initialization
 portable-atomic = { version = "1.10", features = ["critical-section"] }
 
-# ── ESP32-S3 전용 (호스트 테스트 빌드에서 제외) ──
+# ── ESP 칩 전용 (호스트 테스트 빌드에서 제외, 칩은 [features]로 선택) ──
 [target.'cfg(target_arch = "xtensa")'.dependencies]
-# ── ESP32-S3 HAL (no_std) ──
-esp-hal = { version = "=1.0.0-rc.0", features = ["esp32s3"] }  # esp-hal-embassy 0.9 requires rc.0
-esp-backtrace = { version = "0.15", features = [
-    "esp32s3",
-    "panic-handler",
-    "println",
-] }
-esp-println = { version = "0.13", features = ["esp32s3", "log"] }
+# ── ESP HAL (no_std) ──
+esp-hal = { version = "=1.0.0-rc.0", features = ["unstable"] }  # esp-hal-embassy 0.9 requires rc.0 + unstable
+esp-backtrace = { version = "0.15", features = ["panic-handler", "println"] }
+esp-println = { version = "0.13", features = ["log"] }
 esp-alloc = "0.7"
+esp-bootloader-esp-idf = "0.2"  # espflash 4가 요구하는 ESP-IDF 앱 디스크립터
 
 # ── Embassy async runtime ──
 embassy-executor = { version = "0.7", features = ["task-arena-size-20480"] }
 embassy-time = "0.4"
-esp-hal-embassy = { version = "0.9", features = ["esp32s3"] }
+esp-hal-embassy = "0.9"
 
 # ── Robot Control ──
 # PID controller (no_std compatible)
 # nalgebra = { version = "0.33", default-features = false, features = ["libm"] }
+
+# ── 칩 선택 (하나만 활성화) ──
+# ESP32:    cargo build --release --target xtensa-esp32-none-elf --no-default-features --features esp32
+# 또는:     make build CHIP=esp32
+[features]
+default = ["esp32s3"]
+esp32s3 = [
+    "esp-hal/esp32s3",
+    "esp-backtrace/esp32s3",
+    "esp-println/esp32s3",
+    "esp-hal-embassy/esp32s3",
+    "esp-bootloader-esp-idf/esp32s3",
+]
+esp32 = [
+    "esp-hal/esp32",
+    "esp-backtrace/esp32",
+    "esp-println/esp32",
+    "esp-hal-embassy/esp32",
+    "esp-bootloader-esp-idf/esp32",
+]
 
 [profile.dev]
 opt-level = "s"           # Optimize for size even in debug
