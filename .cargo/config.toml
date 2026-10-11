@@ -20,6 +20,8 @@ target = "xtensa-esp32s3-none-elf"
 
 [env]
 ESP_LOG = "info"
+# esp-wifi 규제 도메인 (기본값 CN)
+ESP_WIFI_CONFIG_COUNTRY_CODE = "KR"
 
 [unstable]
 build-std = ["core", "alloc"]

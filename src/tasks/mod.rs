@@ -12,6 +12,7 @@
 //!   Low       : heartbeat, logging, comms  — 100ms+ 주기
 
 pub mod heartbeat;
+pub mod wifi;
 
 // TODO: Phase 2 태스크들
 // pub mod motor;      // PWM 모터 제어 + PID 루프

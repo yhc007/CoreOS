@@ -22,13 +22,17 @@ portable-atomic = { version = "1.10", features = ["critical-section"] }
 esp-hal = { version = "=1.0.0-rc.0", features = ["unstable"] }  # esp-hal-embassy 0.9 requires rc.0 + unstable
 esp-backtrace = { version = "0.15", features = ["panic-handler", "println"] }
 esp-println = { version = "0.13", features = ["log"] }
-esp-alloc = "0.7"
+esp-alloc = "0.8"            # esp-wifi 0.15 요구
 esp-bootloader-esp-idf = "0.2"  # espflash 4가 요구하는 ESP-IDF 앱 디스크립터
 
 # ── Embassy async runtime ──
-embassy-executor = { version = "0.7", features = ["task-arena-size-20480"] }
+embassy-executor = { version = "0.7", features = ["task-arena-size-32768"] }  # Wi-Fi/네트워크 태스크 포함
 embassy-time = "0.4"
 esp-hal-embassy = "0.9"
+
+# ── Wi-Fi + 네트워크 스택 ──
+esp-wifi = { version = "0.15", features = ["wifi", "log-04"] }
+embassy-net = { version = "=0.7.0", features = ["dhcpv4", "medium-ethernet", "tcp", "udp"] }  # 0.7.1은 embassy-time 0.5 요구
 
 # ── Robot Control ──
 # PID controller (no_std compatible)
@@ -45,6 +49,7 @@ esp32s3 = [
     "esp-println/esp32s3",
     "esp-hal-embassy/esp32s3",
     "esp-bootloader-esp-idf/esp32s3",
+    "esp-wifi/esp32s3",
 ]
 esp32 = [
     "esp-hal/esp32",
@@ -52,12 +57,20 @@ esp32 = [
     "esp-println/esp32",
     "esp-hal-embassy/esp32",
     "esp-bootloader-esp-idf/esp32",
+    "esp-wifi/esp32",
 ]
 
 [profile.dev]
 opt-level = "s"           # Optimize for size even in debug
 debug = true
 overflow-checks = true
+
+# esp-wifi는 opt-level 2 이상이 아니면 접속이 안 될 수 있음 (esp-wifi 문서)
+[profile.dev.package.esp-wifi]
+opt-level = 3
+
+[profile.release.package.esp-wifi]
+opt-level = 3
 
 [profile.release]
 opt-level = "s"           # Size optimization

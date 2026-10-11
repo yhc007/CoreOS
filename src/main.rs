@@ -29,6 +29,8 @@ compile_error!("칩 feature를 하나 선택하세요: `esp32` 또는 `esp32s3`"
 use embassy_executor::Spawner;
 use embassy_time::{Duration, Timer};
 use esp_backtrace as _;
+use esp_hal::clock::CpuClock;
+use esp_hal::rng::Rng;
 use esp_hal::timer::timg::TimerGroup;
 use log::info;
 
@@ -45,18 +47,8 @@ const CHIP_NAME: &str = "ESP32";
 esp_bootloader_esp_idf::esp_app_desc!();
 
 // ── Heap Allocator ──
-const HEAP_SIZE: usize = 32 * 1024;
-
-fn init_heap() {
-    static mut HEAP: [u8; HEAP_SIZE] = [0; HEAP_SIZE];
-    unsafe {
-        esp_alloc::HEAP.add_region(esp_alloc::HeapRegion::new(
-            &mut HEAP as *mut _ as *mut u8,
-            HEAP_SIZE,
-            esp_alloc::MemoryCapability::Internal.into(),
-        ));
-    }
-}
+// esp-wifi 스택이 힙을 사용하므로 72KB 확보 (esp-wifi 예제 기준)
+const HEAP_SIZE: usize = 72 * 1024;
 
 /// 힙 사용량 로그 (used / free / 전체, 바이트)
 fn log_heap_usage() {
@@ -78,8 +70,10 @@ fn log_heap_usage() {
 #[esp_hal_embassy::main]
 async fn main(spawner: Spawner) {
     // 1. 시스템 초기화
-    let peripherals = esp_hal::init(esp_hal::Config::default());
-    init_heap();
+    // Wi-Fi는 CPU 80MHz 이상 필요 → 최대 클럭 (ESP32/S3: 240MHz)
+    let config = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
+    let peripherals = esp_hal::init(config);
+    esp_alloc::heap_allocator!(size: HEAP_SIZE);
 
     // 2. Embassy 타이머 드라이버 초기화 (TIMG0 → esp-hal-embassy)
     let timg0 = TimerGroup::new(peripherals.TIMG0);
@@ -105,14 +99,19 @@ async fn main(spawner: Spawner) {
     //     .with_tx(peripherals.GPIO17)
     //     .with_rx(peripherals.GPIO18);
 
-    // 5. Embassy 태스크 스폰
+    // 5. Wi-Fi (TIMG1 + RNG) — 실패해도 제어 루프는 계속 동작
+    let timg1 = TimerGroup::new(peripherals.TIMG1);
+    let rng = Rng::new(peripherals.RNG);
+    tasks::wifi::start(&spawner, timg1.timer0, rng, peripherals.WIFI);
+
+    // 6. Embassy 태스크 스폰
     spawner.must_spawn(tasks::heartbeat::heartbeat_task(led));
     info!("[INIT] Heartbeat task spawned");
 
     info!("[INIT] All tasks spawned. Entering main loop.");
     log_heap_usage();
 
-    // 6. Main loop — 시스템 모니터링
+    // 7. Main loop — 시스템 모니터링
     let mut tick: u64 = 0;
     loop {
         tick += 1;

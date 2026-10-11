@@ -2,3 +2,6 @@
 **/*.rs.bk
 Cargo.lock
 .DS_Store
+
+# Wi-Fi 자격 증명 (로컬 전용)
+.wifi
