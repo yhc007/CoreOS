@@ -5,3 +5,6 @@ Cargo.lock
 
 # Wi-Fi 자격 증명 (로컬 전용)
 .wifi
+
+# 로컬 API 키 파일 (저장소 루트의 .claude 파일)
+/.claude
