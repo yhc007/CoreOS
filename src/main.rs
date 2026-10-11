@@ -35,6 +35,7 @@ use esp_hal::timer::timg::TimerGroup;
 use log::info;
 
 mod hal;
+mod system;
 mod tasks;
 
 // ── 빌드 대상 칩 이름 (부팅 배너용) ──

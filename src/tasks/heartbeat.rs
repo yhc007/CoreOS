@@ -13,6 +13,7 @@ use embassy_time::{Duration, Timer};
 use log::info;
 
 use crate::hal::gpio::LedDriver;
+use crate::system;
 
 /// Heartbeat LED 점멸 패턴
 #[derive(Clone, Copy, PartialEq)]
@@ -41,7 +42,7 @@ impl HeartbeatPattern {
 /// LED를 토글하며 시스템 상태를 시각적으로 표시합니다.
 #[embassy_executor::task]
 pub async fn heartbeat_task(mut led: LedDriver) {
-    let pattern = HeartbeatPattern::Idle;
+    let mut pattern = HeartbeatPattern::Idle;
     let mut count: u64 = 0;
 
     info!("[HEARTBEAT] Started — pattern: Idle (1Hz)");
@@ -64,7 +65,10 @@ pub async fn heartbeat_task(mut led: LedDriver) {
             }
         }
 
-        // TODO: 시스템 상태에 따라 패턴 변경
-        // pattern = SYSTEM_STATE.lock().heartbeat_pattern();
+        // E-Stop이 걸리면 LED 상시 점등
+        if system::is_estop() && pattern != HeartbeatPattern::Error {
+            pattern = HeartbeatPattern::Error;
+            info!("[HEARTBEAT] E-Stop active — LED solid on");
+        }
     }
 }

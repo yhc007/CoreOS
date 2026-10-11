@@ -32,6 +32,7 @@ esp-hal-embassy = "0.9"
 
 # ── Wi-Fi + 네트워크 스택 ──
 esp-wifi = { version = "0.15", features = ["wifi", "log-04"] }
+embedded-io-async = "0.6"   # TcpSocket read_exact / write_all
 embassy-net = { version = "=0.7.0", features = ["dhcpv4", "medium-ethernet", "tcp", "udp"] }  # 0.7.1은 embassy-time 0.5 요구
 
 # ── Robot Control ──

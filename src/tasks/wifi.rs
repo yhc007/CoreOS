@@ -8,7 +8,7 @@
 //!
 //! 예) WIFI_SSID=MyAP WIFI_PASSWORD=secret make build CHIP=esp32
 //!
-//! 향후 Tier 1 (Linux SBC) ↔ Tier 2 통신 경로로 사용 예정.
+//! STA 모드에서는 Tier 1 ↔ Tier 2 TCP 명령 서버(`command_server`)도 함께 시작.
 
 use alloc::string::String;
 use embassy_executor::Spawner;
@@ -82,6 +82,7 @@ pub fn start(
             spawner.must_spawn(connection_task(controller, ssid));
             spawner.must_spawn(net_task(runner));
             spawner.must_spawn(ip_report_task(stack));
+            spawner.must_spawn(super::command_server::command_server_task(stack));
         }
     }
 }

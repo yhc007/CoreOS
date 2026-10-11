@@ -11,6 +11,7 @@
 //!   Medium    : sensor_read, imu_fusion    — 1ms 주기
 //!   Low       : heartbeat, logging, comms  — 100ms+ 주기
 
+pub mod command_server;
 pub mod heartbeat;
 pub mod wifi;
 

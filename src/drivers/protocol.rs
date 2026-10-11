@@ -8,8 +8,11 @@
 //! 프로토콜 구조:
 //!   [STX][LEN_H][LEN_L][MSG_TYPE][PAYLOAD...][CRC16][ETX]
 //!
-//! 전송 매체: UART (기본 921600 baud) 또는 SPI
+//! 전송 매체: UART (기본 921600 baud), SPI, 또는 TCP (Wi-Fi, 포트 7000)
 //! 최대 지연: <1ms (UART), <100µs (SPI)
+//!
+//! 스트림(TCP/UART) 수신 시: 헤더 4바이트를 먼저 읽고 [`frame_len`]으로
+//! 나머지 길이를 계산한 뒤 프레임 전체를 [`Frame::deserialize`]에 전달.
 
 use heapless::Vec;
 
@@ -18,7 +21,14 @@ const STX: u8 = 0x02; // Start of frame
 const ETX: u8 = 0x03; // End of frame
 
 /// 최대 페이로드 크기 (bytes)
-const MAX_PAYLOAD: usize = 256;
+pub const MAX_PAYLOAD: usize = 256;
+
+/// 헤더 길이: STX + LEN_H + LEN_L + MSG_TYPE
+pub const HEADER_LEN: usize = 4;
+/// 트레일러 길이: CRC16 (2) + ETX
+pub const TRAILER_LEN: usize = 3;
+/// 최대 프레임 길이
+pub const MAX_FRAME: usize = HEADER_LEN + MAX_PAYLOAD + TRAILER_LEN;
 
 /// 메시지 타입 — Tier 1 → Tier 2 (명령)
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -38,6 +48,22 @@ pub enum CommandType {
     SetSensorStream = 0x30,
     /// Ping (연결 확인)
     Ping = 0xFE,
+}
+
+impl CommandType {
+    /// 바이트 → 명령 타입 (알 수 없는 값은 None)
+    pub fn from_u8(value: u8) -> Option<Self> {
+        match value {
+            0x10 => Some(Self::SetMotorSpeed),
+            0x11 => Some(Self::SetServoAngle),
+            0x12 => Some(Self::SetPidGains),
+            0x1F => Some(Self::EmergencyStop),
+            0x20 => Some(Self::RequestStatus),
+            0x30 => Some(Self::SetSensorStream),
+            0xFE => Some(Self::Ping),
+            _ => None,
+        }
+    }
 }
 
 /// 메시지 타입 — Tier 2 → Tier 1 (리포트)
@@ -108,7 +134,10 @@ impl Frame {
         let len = ((data[1] as u16) << 8 | data[2] as u16) as usize;
         let msg_type = data[3];
 
-        if data.len() < 6 + len {
+        if len > MAX_PAYLOAD {
+            return Err(ProtocolError::PayloadTooLarge);
+        }
+        if data.len() != HEADER_LEN + len + TRAILER_LEN {
             return Err(ProtocolError::TooShort);
         }
 
@@ -127,6 +156,18 @@ impl Frame {
 
         Ok(Self { msg_type, payload })
     }
+}
+
+/// 헤더로부터 프레임 전체 길이 계산 (스트림 수신용)
+pub fn frame_len(header: &[u8; HEADER_LEN]) -> Result<usize, ProtocolError> {
+    if header[0] != STX {
+        return Err(ProtocolError::InvalidStart);
+    }
+    let len = ((header[1] as usize) << 8) | header[2] as usize;
+    if len > MAX_PAYLOAD {
+        return Err(ProtocolError::PayloadTooLarge);
+    }
+    Ok(HEADER_LEN + len + TRAILER_LEN)
 }
 
 /// 프로토콜 에러
@@ -222,6 +263,58 @@ impl SensorReport {
     }
 }
 
+/// 시스템 상태 리포트 (Tier 2 → Tier 1, `ReportType::SystemStatus`)
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SystemStatusReport {
+    pub uptime_ms: u32,
+    pub heap_used: u32,
+    pub heap_free: u32,
+    pub estop: bool,
+}
+
+impl SystemStatusReport {
+    pub const PAYLOAD_LEN: usize = 13;
+
+    pub fn to_payload(&self) -> [u8; Self::PAYLOAD_LEN] {
+        let mut buf = [0u8; Self::PAYLOAD_LEN];
+        buf[0..4].copy_from_slice(&self.uptime_ms.to_be_bytes());
+        buf[4..8].copy_from_slice(&self.heap_used.to_be_bytes());
+        buf[8..12].copy_from_slice(&self.heap_free.to_be_bytes());
+        buf[12] = self.estop as u8;
+        buf
+    }
+
+    pub fn from_payload(data: &[u8]) -> Result<Self, ProtocolError> {
+        if data.len() < Self::PAYLOAD_LEN {
+            return Err(ProtocolError::TooShort);
+        }
+        let u32_at = |i: usize| u32::from_be_bytes([data[i], data[i + 1], data[i + 2], data[i + 3]]);
+        Ok(Self {
+            uptime_ms: u32_at(0),
+            heap_used: u32_at(4),
+            heap_free: u32_at(8),
+            estop: data[12] != 0,
+        })
+    }
+}
+
+/// 에러 코드 (`ReportType::ErrorAlert` 페이로드 첫 바이트)
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[repr(u8)]
+pub enum ErrorCode {
+    /// 프레임 파싱 실패 (CRC, 마커, 길이)
+    BadFrame = 0x01,
+    /// 알 수 없는 명령 타입
+    UnknownCommand = 0x02,
+    /// 정의는 되어 있으나 아직 구현되지 않은 명령 (하드웨어 미연결 등)
+    Unsupported = 0x03,
+}
+
+/// 에러 알림 페이로드: [ErrorCode, 원인이 된 MSG_TYPE]
+pub fn error_alert_payload(code: ErrorCode, msg_type: u8) -> [u8; 2] {
+    [code as u8, msg_type]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -245,5 +338,56 @@ mod tests {
         assert_eq!(decoded.motor_id, 2);
         assert_eq!(decoded.target_rpm, -1500);
         assert_eq!(decoded.accel_ms, 200);
+    }
+
+    fn encode(msg_type: u8, payload: &[u8]) -> Vec<u8, 512> {
+        let mut frame = Frame::new(msg_type);
+        frame.payload.extend_from_slice(payload).unwrap();
+        let mut buf = Vec::new();
+        frame.serialize(&mut buf).unwrap();
+        buf
+    }
+
+    #[test]
+    fn test_frame_roundtrip_and_len() {
+        let buf = encode(CommandType::Ping as u8, b"abc");
+        let header: [u8; HEADER_LEN] = buf[..HEADER_LEN].try_into().unwrap();
+        assert_eq!(frame_len(&header).unwrap(), buf.len());
+
+        let frame = Frame::deserialize(&buf).unwrap();
+        assert_eq!(frame.msg_type, CommandType::Ping as u8);
+        assert_eq!(&frame.payload[..], b"abc");
+    }
+
+    #[test]
+    fn test_frame_rejects_bad_crc_and_length() {
+        let mut buf = encode(CommandType::RequestStatus as u8, &[]);
+        let crc_idx = buf.len() - 2;
+        buf[crc_idx] ^= 0xFF;
+        assert_eq!(Frame::deserialize(&buf).err(), Some(ProtocolError::CrcMismatch));
+
+        // 페이로드 길이와 실제 길이가 다르면 거부
+        let buf = encode(CommandType::Ping as u8, b"xy");
+        assert_eq!(Frame::deserialize(&buf[..buf.len() - 1]).err(), Some(ProtocolError::InvalidEnd));
+        assert_eq!(frame_len(&[0x55, 0, 0, 0]).err(), Some(ProtocolError::InvalidStart));
+        assert_eq!(frame_len(&[STX, 0x01, 0x01, 0]).err(), Some(ProtocolError::PayloadTooLarge));
+    }
+
+    #[test]
+    fn test_system_status_roundtrip() {
+        let report = SystemStatusReport {
+            uptime_ms: 123_456,
+            heap_used: 43_116,
+            heap_free: 30_612,
+            estop: true,
+        };
+        assert_eq!(SystemStatusReport::from_payload(&report.to_payload()).unwrap(), report);
+    }
+
+    #[test]
+    fn test_command_type_from_u8() {
+        assert_eq!(CommandType::from_u8(0xFE), Some(CommandType::Ping));
+        assert_eq!(CommandType::from_u8(0x1F), Some(CommandType::EmergencyStop));
+        assert_eq!(CommandType::from_u8(0x99), None);
     }
 }
